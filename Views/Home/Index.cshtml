@@ -1,0 +1,90 @@
+﻿@model List<string>
+
+<div class="row">
+    <div class="col-md-12">
+        <h2>Danh sách tài liệu từ Supabase</h2>
+        <hr />
+
+        <ul style="list-style: none; padding-left: 0;">
+            @foreach (var file in Model)
+            {
+                <li class="pdf-item mb-2">
+                    <span class="pdf-icon">📄</span>
+                    <strong>@file</strong>
+                    <button class="btn btn-primary btn-view" data-filename="@file">Xem ngay</button>
+                </li>
+            }
+        </ul>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div id="pdf-container" style="min-height:600px; border:1px solid #ddd;">
+            <p style="text-align:center; padding-top:200px; color:#666;">
+                Chọn một tài liệu phía trên để bắt đầu đọc
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- jsPDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+    document.querySelectorAll('.btn-view').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const filename = btn.getAttribute('data-filename');
+            const ext = filename.split('.').pop().toLowerCase();
+
+            // URL public Supabase (bỏ dấu . thừa)
+            const fileUrl = `https://urkrqfuboqiknvqbwwwd.supabase.co/storage/v1/object/public/pdf-bucket./${filename}`;
+
+            if(ext === 'pdf') {
+                // Hiển thị PDF trực tiếp
+                document.getElementById('pdf-container').innerHTML = `
+                    <iframe src="${fileUrl}" style="width:100%; height:600px;" frameborder="0"></iframe>
+                `;
+            }
+            else if(ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+                try {
+                    // Fetch ảnh để tránh lỗi CORS
+                    const response = await fetch(fileUrl);
+                    if(!response.ok) throw new Error('Không tải được file ảnh');
+                    const blob = await response.blob();
+                    const img = new Image();
+                    img.src = URL.createObjectURL(blob);
+                    img.onload = () => {
+                        const pdf = new window.jspdf.jsPDF();
+                        const pageWidth = pdf.internal.pageSize.getWidth();
+                        const pageHeight = pdf.internal.pageSize.getHeight();
+
+                        // Fit ảnh vào trang PDF
+                        const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
+                        const imgWidth = img.width * ratio;
+                        const imgHeight = img.height * ratio;
+                        const x = (pageWidth - imgWidth) / 2;
+                        const y = (pageHeight - imgHeight) / 2;
+
+                        pdf.addImage(img, 'PNG', x, y, imgWidth, imgHeight);
+
+                        const pdfBlob = pdf.output('blob');
+                        const url = URL.createObjectURL(pdfBlob);
+
+                        document.getElementById('pdf-container').innerHTML = `
+                            <iframe src="${url}" style="width:100%; height:600px;"></iframe>
+                        `;
+                    };
+                    img.onerror = () => {
+                        alert('Không tải được ảnh từ Supabase.');
+                    }
+                } catch(e) {
+                    alert('Lỗi khi tải ảnh: ' + e.message);
+                }
+            }
+            else {
+                alert('File này chưa hỗ trợ xem trực tiếp.');
+            }
+        });
+    });
+</script>
