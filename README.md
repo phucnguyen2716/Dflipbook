@@ -225,6 +225,350 @@ document.querySelectorAll('.btn-view').forEach(btn =&gt; {
     <li>Thay vì iframe, tạo div chứa từng trang PDF/ảnh để render dạng lật trang.</li>
     <li>Kết hợp Supabase fetch + jsPDF hoặc ảnh PNG/JPG làm page source.</li>
 </ul>
+<hr>
+
+<h2 id="convert-controller">9. Controller nâng cao: Convert & Cache PDF (Server-side)</h2>
+
+<p>Phần này mở rộng Controller để:</p>
+<ul>
+    <li>Không convert lặp lại cùng một file</li>
+    <li>Chỉ convert khi PDF chưa tồn tại</li>
+    <li>Lưu PDF tạm trong <code>wwwroot/temp-pdf</code></li>
+    <li>Dùng cho iframe, DFlip, Flipbook</li>
+</ul>
+
+<h3>Luồng xử lý</h3>
+<ul>
+    <li><strong>PDF:</strong> copy về server 1 lần</li>
+    <li><strong>PNG / JPG:</strong> convert sang PDF</li>
+    <li><strong>DOCX / PPTX / XLSX:</strong> dùng LibreOffice convert</li>
+    <li><strong>Đã tồn tại PDF:</strong> dùng lại, không convert</li>
+</ul>
+
+<pre>
+/viewer/{filename}
+        ↓
+Kiểm tra wwwroot/temp-pdf/{filename}.pdf
+        ↓
+Tồn tại → trả URL
+Chưa có → tải từ Supabase → convert → lưu → trả URL
+</pre>
+
+---
+
+<h3>Ví dụ Controller: ViewerController.cs</h3>
+
+<pre>
+[HttpGet("/viewer/{*fileName}")]
+public async Task<IActionResult> ViewFilePdf(string fileName)
+{
+    if (string.IsNullOrEmpty(fileName))
+        return BadRequest("Filename is empty");
+
+    var ext = Path.GetExtension(fileName).ToLower();
+
+    var tempDir = Path.Combine(
+        Directory.GetCurrentDirectory(),
+        "wwwroot",
+        "temp-pdf"
+    );
+    Directory.CreateDirectory(tempDir);
+
+    var pdfFileName = Path.GetFileNameWithoutExtension(fileName) + ".pdf";
+    var pdfPath = Path.Combine(tempDir, pdfFileName);
+
+    if (!System.IO.File.Exists(pdfPath))
+    {
+        var signedUrl = await _supabaseService.GetPdfUrlAsync(fileName);
+        using var http = new HttpClient();
+
+        if (ext == ".pdf")
+        {
+            var bytes = await http.GetByteArrayAsync(signedUrl);
+            await System.IO.File.WriteAllBytesAsync(pdfPath, bytes);
+        }
+        else
+        {
+            var tempInput = Path.Combine(Path.GetTempPath(), fileName);
+            var bytes = await http.GetByteArrayAsync(signedUrl);
+            await System.IO.File.WriteAllBytesAsync(tempInput, bytes);
+
+            await ConvertOfficeToPdf(tempInput, tempDir);
+            System.IO.File.Delete(tempInput);
+        }
+    }
+
+    return Json(new {
+        url = "/temp-pdf/" + pdfFileName
+    });
+}
+</pre>
+
+---
+
+<h2 id="libreoffice">10. Convert Office sang PDF bằng LibreOffice</h2>
+
+<p>Cài LibreOffice trên server (Windows):</p>
+
+<pre>
+https://www.libreoffice.org/download/download/
+</pre>
+
+<p>Hàm convert:</p>
+
+<pre>
+private async Task ConvertOfficeToPdf(string inputPath, string outputDir)
+{
+    var sofficePath = @"C:\Program Files\LibreOffice\program\soffice.exe";
+
+    var process = new Process
+    {
+        StartInfo = new ProcessStartInfo
+        {
+            FileName = sofficePath,
+            Arguments = $"--headless --convert-to pdf \"{inputPath}\" --outdir \"{outputDir}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }
+    };
+
+    process.Start();
+    await process.WaitForExitAsync();
+}
+</pre>
+
+<p><strong>Lưu ý:</strong></p>
+<ul>
+    <li>Server production cần cài LibreOffice</li>
+    <li>Docker cần image có sẵn LibreOffice</li>
+</ul>
+
+---
+
+<h2 id="dflip">11. Tích hợp DFlip / Flipbook</h2>
+
+<p>Sau khi Controller trả về URL PDF, chỉ cần truyền cho DFlip:</p>
+
+<pre>
+function openFlip(filename) {
+    fetch(`/viewer/${encodeURIComponent(filename)}`)
+        .then(res => res.json())
+        .then(data => {
+            $('#flipbookContainer').html('');
+            $('#flipbookContainer').flipBook({
+                source: data.url,
+                lightBox: false,
+                layout: 3,
+                skin: 'light',
+                pageMode: 'double'
+            });
+        });
+}
+</pre>
+
+<p>Ưu điểm:</p>
+<ul>
+    <li>PDF load nhanh</li>
+    <li>DFlip nhận đúng source PDF</li>
+    <li>Không lỗi "Unknown source type"</li>
+</ul>
+
+---
+
+<h2 id="performance">12. Hiệu năng & Best Practices</h2>
+
+<ul>
+    <li>✔ Cache PDF theo <strong>tên file</strong></li>
+    <li>✔ Không convert lặp</li>
+    <li>✔ DFlip chỉ đọc file tĩnh</li>
+    <li>✔ Có thể cleanup <code>temp-pdf</code> theo cron</li>
+</ul>
+
+<p>Gợi ý cleanup:</p>
+
+<pre>
+Xóa file temp-pdf cũ hơn 7 ngày
+</pre>
+
+---
+
+<h2 id="tong-ket">13. Tổng kết</h2>
+
+<ul>
+    <li>Supabase = nơi lưu file gốc</li>
+    <li>ASP.NET = xử lý + convert + cache</li>
+    <li>Client = iframe / Flipbook / DFlip</li>
+</ul>
+
+<p><strong>Mô hình này phù hợp:</strong></p>
+<ul>
+    <li>Hệ thống tài liệu</li>
+    <li>E-learning</li>
+    <li>Hồ sơ – biểu mẫu</li>
+    <li>Admin dashboard</li>
+</ul>
+<hr>
+
+<h2 id="libreoffice-requirement">2.1. Yêu cầu bắt buộc: Cài LibreOffice (Server-side)</h2>
+
+<p>
+Để hệ thống có thể <strong>convert các file không phải PDF</strong> (DOCX, PPTX, XLSX, ODT, v.v.)
+sang PDF ở phía <strong>server</strong>, bạn <strong>bắt buộc phải cài LibreOffice</strong>.
+</p>
+
+<h3>Vì sao cần LibreOffice?</h3>
+<ul>
+    <li>ASP.NET không convert Office sang PDF native</li>
+    <li>LibreOffice hỗ trợ convert headless (không giao diện)</li>
+    <li>Ổn định, miễn phí, dùng tốt cho server</li>
+</ul>
+
+<p>
+Controller sẽ gọi trực tiếp:
+</p>
+
+<pre>
+soffice --headless --convert-to pdf input.docx
+</pre>
+
+---
+
+<h3>Hệ điều hành được hỗ trợ</h3>
+<ul>
+    <li>✔ Windows Server / Windows 10+</li>
+    <li>✔ Linux (Ubuntu, Debian)</li>
+    <li>✔ Docker Container</li>
+</ul>
+
+---
+
+<h3>Cài LibreOffice trên Windows</h3>
+
+<ol>
+    <li>Tải tại:
+        <br>
+        <a href="https://www.libreoffice.org/download/download/" target="_blank">
+            https://www.libreoffice.org/download/download/
+        </a>
+    </li>
+    <li>Cài đặt mặc định (Next → Next → Finish)</li>
+    <li>Đường dẫn mặc định sau khi cài:
+        <pre>C:\Program Files\LibreOffice\program\soffice.exe</pre>
+    </li>
+</ol>
+
+<h4>Kiểm tra nhanh</h4>
+<pre>
+"C:\Program Files\LibreOffice\program\soffice.exe" --version
+</pre>
+
+---
+
+<h3>Cài LibreOffice trên Linux (Ubuntu)</h3>
+
+<pre>
+sudo apt update
+sudo apt install libreoffice -y
+</pre>
+
+<p>Kiểm tra:</p>
+
+<pre>
+soffice --version
+</pre>
+
+<p>Đường dẫn thường là:</p>
+
+<pre>
+/usr/bin/soffice
+</pre>
+
+---
+
+<h3>Cài LibreOffice trong Docker (Khuyến nghị)</h3>
+
+<p>Ví dụ Dockerfile:</p>
+
+<pre>
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+
+RUN apt-get update \
+    && apt-get install -y libreoffice \
+    && apt-get clean
+
+WORKDIR /app
+COPY . .
+ENTRYPOINT ["dotnet", "YourApp.dll"]
+</pre>
+
+---
+
+<h3>Cấu hình đường dẫn LibreOffice trong code</h3>
+
+<p>Windows:</p>
+<pre>
+var sofficePath = @"C:\Program Files\LibreOffice\program\soffice.exe";
+</pre>
+
+<p>Linux / Docker:</p>
+<pre>
+var sofficePath = "soffice";
+</pre>
+
+<p><strong>Khuyến nghị:</strong> đưa vào <code>appsettings.json</code></p>
+
+<pre>
+"LibreOffice": {
+  "Path": "C:\\Program Files\\LibreOffice\\program\\soffice.exe"
+}
+</pre>
+
+---
+
+<h3>Lỗi thường gặp & cách xử lý</h3>
+
+<table border="1" cellpadding="8" cellspacing="0">
+    <tr>
+        <th>Lỗi</th>
+        <th>Nguyên nhân</th>
+        <th>Cách xử lý</th>
+    </tr>
+    <tr>
+        <td>soffice.exe not found</td>
+        <td>Chưa cài LibreOffice</td>
+        <td>Cài LibreOffice</td>
+    </tr>
+    <tr>
+        <td>Failed to start process 'soffice'</td>
+        <td>Sai đường dẫn</td>
+        <td>Kiểm tra path</td>
+    </tr>
+    <tr>
+        <td>Access denied</td>
+        <td>Server không có quyền</td>
+        <td>Run service với quyền đủ</td>
+    </tr>
+</table>
+
+---
+
+<h3>Lưu ý quan trọng khi triển khai Production</h3>
+
+<ul>
+    <li>✔ Không convert đồng thời quá nhiều file</li>
+    <li>✔ Nên cache PDF sau khi convert</li>
+    <li>✔ Cleanup <code>wwwroot/temp-pdf</code> định kỳ</li>
+    <li>✔ Không gọi LibreOffice trong request quá dài</li>
+</ul>
+
+<p>
+<strong>Gợi ý nâng cao:</strong>
+</p>
+<ul>
+    <li>Background job (Hangfire)</li>
+    <li>Queue convert</li>
+    <li>Hash file để cache</li>
+</ul>
 
 </body>
 </html>
