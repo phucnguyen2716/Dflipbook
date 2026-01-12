@@ -37,43 +37,48 @@ namespace Dflipbook.Controllers
                     return BadRequest("Filename is empty");
 
                 var ext = Path.GetExtension(fileName).ToLower();
-                var signedUrl = await _supabaseService.GetPdfUrlAsync(fileName);
 
                 var tempDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "temp-pdf");
                 Directory.CreateDirectory(tempDir);
 
-                string pdfPath;
+                // 🔑 PDF name = file gốc nhưng đổi sang .pdf
+                var pdfFileName = Path.GetFileNameWithoutExtension(fileName) + ".pdf";
+                var pdfPath = Path.Combine(tempDir, pdfFileName);
 
-                if (ext == ".pdf")
+                // ✅ NẾU PDF ĐÃ TỒN TẠI → KHÔNG CONVERT
+                if (!System.IO.File.Exists(pdfPath))
                 {
-                    pdfPath = Path.Combine(tempDir, Path.GetFileName(fileName));
+                    var signedUrl = await _supabaseService.GetPdfUrlAsync(fileName);
                     using var http = new HttpClient();
-                    var bytes = await http.GetByteArrayAsync(signedUrl);
-                    await System.IO.File.WriteAllBytesAsync(pdfPath, bytes);
+
+                    if (ext == ".pdf")
+                    {
+                        var bytes = await http.GetByteArrayAsync(signedUrl);
+                        await System.IO.File.WriteAllBytesAsync(pdfPath, bytes);
+                    }
+                    else
+                    {
+                        var tempInput = Path.Combine(
+                            Path.GetTempPath(),
+                            Path.GetFileName(fileName) // ❌ không dùng Guid
+                        );
+
+                        var bytes = await http.GetByteArrayAsync(signedUrl);
+                        await System.IO.File.WriteAllBytesAsync(tempInput, bytes);
+
+                        await ConvertToPdf(tempInput, tempDir);
+
+                        System.IO.File.Delete(tempInput);
+                    }
                 }
-                else
+
+                return Json(new
                 {
-                    var tempInput = Path.Combine(
-                        Path.GetTempPath(),
-                        Guid.NewGuid() + ext
-                    );
-
-                    using var http = new HttpClient();
-                    var bytes = await http.GetByteArrayAsync(signedUrl);
-                    await System.IO.File.WriteAllBytesAsync(tempInput, bytes);
-
-                    pdfPath = await ConvertToPdf(tempInput, tempDir);
-
-                    System.IO.File.Delete(tempInput);
-                }
-
-                var pdfUrl = "/temp-pdf/" + Path.GetFileName(pdfPath);
-
-                return Json(new { url = pdfUrl });
+                    url = "/temp-pdf/" + pdfFileName
+                });
             }
             catch (Exception ex)
             {
-                // 🔥 BẮT BUỘC để debug
                 return StatusCode(500, ex.Message);
             }
         }
