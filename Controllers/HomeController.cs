@@ -41,6 +41,12 @@ namespace Dflipbook.Controllers
                 var tempDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "temp-pdf");
                 Directory.CreateDirectory(tempDir);
 
+                foreach (var file in Directory.GetFiles(tempDir, "*.pdf"))
+                {
+                    System.IO.File.Delete(file);
+                }
+
+
                 // 🔑 PDF name = file gốc nhưng đổi sang .pdf
                 var pdfFileName = Path.GetFileNameWithoutExtension(fileName) + ".pdf";
                 var pdfPath = Path.Combine(tempDir, pdfFileName);
@@ -69,6 +75,7 @@ namespace Dflipbook.Controllers
                         await ConvertToPdf(tempInput, tempDir);
 
                         System.IO.File.Delete(tempInput);
+
                     }
                 }
 
